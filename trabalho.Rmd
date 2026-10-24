@@ -1,0 +1,260 @@
+---
+title: "Análise descritiva dos migrantes qualificados — CGIL, 2024 e 2025"
+date: "`r format(Sys.Date(), '%d/%m/%Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+# Instala apenas os pacotes ausentes (internet necessária na primeira vez).
+pacotes <- c("rmarkdown", "knitr", "dplyr", "ggplot2", "stringr")
+faltando <- setdiff(pacotes, rownames(installed.packages()))
+if (length(faltando)) install.packages(faltando, repos = "https://cloud.r-project.org")
+library(knitr)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Introdução
+
+Este relatório apresenta uma análise descritiva dos registros de autorizações da Coordenação-Geral de Imigração Laboral (CGIL) em 2024 e 2025. A comparação concentra-se nos três primeiros trimestres de cada ano e no perfil do terceiro trimestre de 2025.
+
+# Leitura e preparação dos dados
+
+
+
+```{r leitura}
+arquivos <- c("CGIL_CNIg_2024(in).csv", "CGIL_CNIg_2025(in).csv")
+if (!all(file.exists(arquivos))) {
+  stop("Não encontrei os dois arquivos CSV. Coloque os CSVs na mesma pasta do RMarkdown.")
+}
+d24 <- read.csv2(arquivos[1], stringsAsFactors = FALSE, fileEncoding = "UTF-8")
+d25 <- read.csv2(arquivos[2], stringsAsFactors = FALSE, fileEncoding = "UTF-8")
+dados <- bind_rows(d24, d25)
+dados$ano <- as.integer(dados$ano)
+dados$mes <- as.integer(dados$mes)
+dados$trimestre <- ceiling(dados$mes / 3)
+kable(data.frame(Ano = c(2024, 2025, "Total"), Registros = c(nrow(d24), nrow(d25), nrow(dados))))
+```
+
+## Tratamento dos acentos
+
+Alguns textos já vêm com caracteres corrompidos nos CSVs, como `SÃ£o Paulo`. A função abaixo tenta reconstruir os acentos **somente para apresentação**, preservando os valores originais usados nos filtros. Textos que não puderem ser convertidos permanecem como estão.
+
+```{r acentos}
+corrigir_acentos <- function(x) {
+  x <- as.character(x)
+  y <- suppressWarnings(iconv(x, from = "UTF-8", to = "latin1", sub = NA))
+  Encoding(y) <- "UTF-8"
+  valido <- !is.na(y) & !is.na(iconv(y, from = "UTF-8", to = "UTF-8", sub = NA))
+  usar <- !is.na(x) & grepl("Ã|Â", x) & valido
+  x[usar] <- y[usar]
+  x
+}
+```
+
+# Definição operacional de migrantes qualificados
+
+Consideram-se registros da modalidade CGIL, deferidos e com escolaridade superior ou acima. A escolaridade aparece em dois formatos no período estudado. Para os amparos legais, identificam-se diretamente RN 02, RN 11 e RN 24; os casos de RN 30 são classificados a partir da resolução de origem entre parênteses.
+
+**Importante:** o enquadramento adicional de RN 17 no segundo trimestre de 2025 e RN 40 no terceiro trimestre de 2025 foi obtido por comparação com a máscara de referência. Trata-se de uma **regra operacional de reprodução da RN 30**, não de uma interpretação jurídica comprovada ou regra geral para outros períodos.
+
+```{r classificacao}
+escolaridades <- c(
+  "5_Superior", "6_PÃ³s-GraduaÃ§Ã£o", "7_Mestrado", "8_Doutorado",
+  "Superior Completo", "PÃ³s-GraduaÃ§Ã£o", "Mestrado", "Doutorado"
+)
+base <- dados %>%
+  filter(modalidade == "CGIL", andamento == "DEFERIDO",
+         escolaridade %in% escolaridades, trimestre %in% 1:3)
+
+amparo <- ifelse(is.na(base$amparo_legal), "", base$amparo_legal)
+base$rn_categoria <- NA_character_
+base$rn_categoria[grepl("NORMATIVA\\s+02/2017", amparo, ignore.case = TRUE)] <- "RN 02"
+base$rn_categoria[grepl("NORMATIVA\\s+11/2017", amparo, ignore.case = TRUE)] <- "RN 11"
+base$rn_categoria[grepl("NORMATIVA\\s+24/2018", amparo, ignore.case = TRUE)] <- "RN 24"
+base$eh_rn30 <- grepl("NORMATIVA\\s+30/2018", amparo, ignore.case = TRUE)
+base$rn_origem <- suppressWarnings(as.integer(str_match(amparo, "\\(RN\\s*0*([0-9]+)/")[, 2]))
+
+rn30_aceita <- with(base,
+  eh_rn30 & (
+    (ano == 2024 & rn_origem %in% c(2, 11, 24)) |
+    (ano == 2025 & trimestre == 1 & rn_origem %in% c(2, 11, 24)) |
+    (ano == 2025 & trimestre == 2 & rn_origem %in% c(2, 11, 24, 17)) |
+    (ano == 2025 & trimestre == 3 & rn_origem %in% c(2, 11, 24, 40))
+  )
+)
+base$rn_categoria[rn30_aceita] <- "RN 30"
+qualificados <- base %>% filter(!is.na(rn_categoria))
+qualificados$rn_categoria <- factor(qualificados$rn_categoria,
+                                   levels = c("RN 02", "RN 11", "RN 24", "RN 30"))
+cat("Registros classificados nos três primeiros trimestres:", nrow(qualificados))
+```
+
+# Distribuição trimestral e comparação com a máscara
+
+A tabela distingue os resultados calculados nos CSVs dos valores publicados na máscara da atividade. As diferenças não foram corrigidas artificialmente no banco de dados.
+
+```{r comparacao-mascara}
+referencia <- data.frame(
+  ano = c(2024L, 2024L, 2024L, 2025L, 2025L, 2025L),
+  trimestre = rep(1:3, 2),
+  mascara = c(721L, 1286L, 1193L, 1051L, 1100L, 1383L)
+)
+trimestres <- qualificados %>% count(ano, trimestre, name = "calculado")
+comparacao <- referencia %>%
+  left_join(trimestres, by = c("ano", "trimestre")) %>%
+  mutate(calculado = coalesce(calculado, 0L),
+         diferenca = mascara - calculado)
+kable(comparacao,
+      col.names = c("Ano", "Trimestre", "Máscara", "Calculado", "Diferença (máscara - calculado)"),
+      caption = "Comparação dos totais trimestrais")
+```
+
+```{r grafico-trimestres}
+ggplot(comparacao, aes(x = factor(trimestre), y = calculado, fill = factor(ano))) +
+  geom_col(position = "dodge") +
+  labs(title = "Migrantes qualificados — registros calculados", x = "Trimestre",
+       y = "Quantidade", fill = "Ano") +
+  theme_minimal()
+```
+
+# Comparação do terceiro trimestre
+
+```{r comparacao-t3}
+t3 <- comparacao %>% filter(trimestre == 3) %>% arrange(ano)
+n24 <- t3$calculado[t3$ano == 2024]
+n25 <- t3$calculado[t3$ano == 2025]
+variacao <- 100 * (n25 - n24) / n24
+kable(t3[, c("ano", "calculado", "mascara")],
+      col.names = c("Ano", "Calculado", "Máscara"))
+```
+
+Nos dados classificados pelo procedimento descrito, o terceiro trimestre passou de **`r n24`** registros em 2024 para **`r n25`** em 2025, uma variação de **`r n25 - n24`** registros (**`r sprintf('%.2f', variacao)`%**). Esses valores diferem dos totais da máscara em 2025, conforme a tabela anterior.
+
+# Perfil do terceiro trimestre de 2025
+
+```{r base-t3}
+t3_2025 <- qualificados %>% filter(ano == 2025, trimestre == 3)
+cat("Total analisado no T3/2025:", nrow(t3_2025))
+```
+
+## Sexo
+
+```{r sexo}
+sexo <- t3_2025 %>%
+  mutate(Sexo = case_when(genero == "F" ~ "Feminino",
+                         genero == "M" ~ "Masculino",
+                         TRUE ~ "Não informado")) %>%
+  count(Sexo, name = "Quantidade") %>%
+  mutate(Percentual = round(100 * Quantidade / sum(Quantidade), 2))
+kable(sexo)
+ggplot(sexo, aes(Sexo, Quantidade, fill = Sexo)) +
+  geom_col() + theme_minimal() + guides(fill = "none") +
+  labs(title = "Distribuição por sexo — T3/2025")
+```
+
+## Escolaridade
+
+```{r escolaridade}
+escolaridade <- t3_2025 %>%
+  mutate(Escolaridade = case_when(
+    escolaridade %in% c("5_Superior", "Superior Completo") ~ "Superior",
+    escolaridade %in% c("6_PÃ³s-GraduaÃ§Ã£o", "PÃ³s-GraduaÃ§Ã£o") ~ "Pós-graduação",
+    escolaridade %in% c("7_Mestrado", "Mestrado") ~ "Mestrado",
+    escolaridade %in% c("8_Doutorado", "Doutorado") ~ "Doutorado",
+    TRUE ~ "Outra")) %>%
+  count(Escolaridade, name = "Quantidade", sort = TRUE) %>%
+  mutate(Percentual = round(100 * Quantidade / sum(Quantidade), 2))
+kable(escolaridade)
+ggplot(escolaridade, aes(reorder(Escolaridade, Quantidade), Quantidade)) +
+  geom_col() + coord_flip() + theme_minimal() +
+  labs(title = "Escolaridade — T3/2025", x = "Escolaridade")
+```
+
+## Resolução Normativa
+
+```{r resolucao}
+rns <- t3_2025 %>% count(rn_categoria, name = "Quantidade") %>%
+  mutate(Percentual = round(100 * Quantidade / sum(Quantidade), 2))
+kable(rns, col.names = c("Resolução", "Quantidade", "Percentual (%)"))
+ggplot(rns, aes(rn_categoria, Quantidade)) +
+  geom_col() + theme_minimal() +
+  labs(title = "Classificação por resolução — T3/2025", x = "Resolução")
+```
+
+## Distribuição mensal
+
+```{r meses}
+meses <- t3_2025 %>% count(mes, name = "Quantidade") %>%
+  mutate(Mês = factor(mes, levels = 7:9, labels = c("Julho", "Agosto", "Setembro"))) %>%
+  select(Mês, Quantidade)
+kable(meses)
+ggplot(meses, aes(Mês, Quantidade)) + geom_col() + theme_minimal() +
+  labs(title = "Distribuição mensal — T3/2025")
+```
+
+## Principais países
+
+```{r pais}
+paises <- t3_2025 %>%
+  filter(!is.na(pais), pais != "") %>%
+  count(pais, sort = TRUE, name = "Quantidade") %>%
+  slice_head(n = 10) %>%
+  mutate(País = corrigir_acentos(pais)) %>%
+  select(País, Quantidade)
+kable(paises)
+ggplot(paises, aes(reorder(País, Quantidade), Quantidade)) +
+  geom_col() + coord_flip() + theme_minimal() +
+  labs(title = "Dez países mais frequentes — T3/2025", x = "País")
+```
+
+## Unidade da Federação
+
+```{r uf}
+ufs <- t3_2025 %>%
+  filter(!is.na(uf_estrangeiro), uf_estrangeiro != "") %>%
+  count(uf_estrangeiro, sort = TRUE, name = "Quantidade") %>%
+  mutate(UF = corrigir_acentos(uf_estrangeiro)) %>%
+  select(UF, Quantidade)
+kable(ufs, caption = "Distribuição por Unidade da Federação — T3/2025")
+```
+
+## Ocupações mais frequentes
+
+```{r ocupacoes}
+ocupacoes <- t3_2025 %>%
+  filter(!is.na(descricao_cbo), descricao_cbo != "") %>%
+  count(descricao_cbo, sort = TRUE, name = "Quantidade") %>%
+  slice_head(n = 10) %>%
+  mutate(Ocupação = corrigir_acentos(descricao_cbo)) %>%
+  select(Ocupação, Quantidade)
+kable(ocupacoes, caption = "Dez ocupações mais frequentes — T3/2025")
+```
+
+# Conferência da RN 30
+
+```{r checagem-rn30}
+conf_rn30 <- qualificados %>%
+  filter(ano == 2025, rn_categoria == "RN 30") %>%
+  count(trimestre, name = "Calculado") %>%
+  left_join(data.frame(trimestre = 1:3, Referência = c(263L, 324L, 374L)),
+            by = "trimestre") %>%
+  mutate(Diferença = Referência - Calculado)
+kable(conf_rn30)
+```
+
+# Limitações metodológicas
+
+A máscara de referência informa, para 2025, **1.051**, **1.100** e **1.383** registros nos trimestres 1, 2 e 3. A classificação aplicada aos CSVs pode apresentar totais inferiores, sobretudo nas RN 02, RN 11 e RN 24. Não há informação suficiente no campo `amparo_legal` para identificar de modo inequívoco quais registros adicionais deveriam ser incluídos nessas categorias. Por esse motivo, **os totais da máscara são exibidos como referência, mas não substituem os resultados efetivamente calculados**.
+
+A regra específica usada para RN 30 em 2025 foi identificada por comparação com a máscara e deve ser entendida como ajuste operacional deste exercício, não como critério jurídico independente.
+
+# Conclusão
+
+O estudo descreveu a evolução trimestral dos registros classificados como migrantes qualificados e o perfil dos trabalhadores no terceiro trimestre de 2025. As tabelas e gráficos permitem observar a distribuição por sexo, escolaridade, resolução, mês, país, UF e ocupação. A comparação com a máscara também evidenciou a importância de documentar os critérios de seleção: pequenas diferenças na interpretação do amparo legal podem alterar os totais e, consequentemente, a análise entre períodos.

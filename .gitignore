@@ -1,0 +1,12 @@
+.Rproj.user
+.Rhistory
+.RData
+.httr-oauth
+.DS_Store
+.quarto
+.RDataTmp
+.RDataTmp1
+*.RDataTmp*
+*.csv
+*.xlsx
+trabalho_files/
